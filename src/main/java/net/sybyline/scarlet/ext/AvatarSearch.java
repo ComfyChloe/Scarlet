@@ -426,18 +426,49 @@ public interface AvatarSearch
         }
     }
 
+    static final int MAX_RETRIES = 2;
+    static final int RETRY_DELAY_MS = 1000;
+
     static VrcxAvatar[] vrcxSearch0(String urlRoot, int n, String search)
     {
-        try (HttpURLInputStream in = HttpURLInputStream.get(urlRoot + "?n=" + Integer.toUnsignedString(n) + "&search=" + URLs.encode(search)))
-        {
-            return in.readAsJson(null, null, VrcxAvatar[].class);
+        String url = urlRoot + "?n=" + Integer.toUnsignedString(n) + "&search=" + URLs.encode(search);
+        for (int attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+            try {
+                if (attempt > 0) {
+                    Thread.sleep(RETRY_DELAY_MS);
+                }
+                
+                try (HttpURLInputStream in = HttpURLInputStream.get(url, conn -> {
+                    conn.setConnectTimeout(10_000);
+                    conn.setReadTimeout(15_000);
+                })) {
+                    return in.readAsJson(null, null, VrcxAvatar[].class);
+                }
+            } catch (IOException ex) {
+                if (ex.getMessage() != null && (ex.getMessage().contains("502") || 
+                                              ex.getMessage().contains("503") || 
+                                              ex.getMessage().contains("504") ||
+                                              ex.getMessage().contains("timed out"))) {
+                    if (attempt < MAX_RETRIES) {
+                        System.err.println("Transient error fetching " + urlRoot + " (attempt " + (attempt + 1) + "/" + (MAX_RETRIES + 1) + "): " + ex.getMessage());
+                        continue;
+                    }
+                }
+                // Log the error with the specific URL that failed
+                System.err.println("Error searching avatars from " + urlRoot + ": " + ex.getMessage());
+                ex.printStackTrace();
+            } catch (InterruptedException ex) {
+                Thread.currentThread().interrupt();
+                return null;
+            } catch (Exception ex) {
+                System.err.println("Unexpected error searching avatars from " + urlRoot + ": " + ex);
+                ex.printStackTrace();
+            }
+            break;
         }
-        catch (Exception ex)
-        {
-            ex.printStackTrace();
-            return null;
-        }
+        return null;
     }
+
     static VrcxAvatar[] vrcxFindInCache(String urlRoot, String search)
     {
         return VrcxAvatar.searchCacheByUrlRoot.getOrDefault(urlRoot, Collections.emptyMap()).get(search);
